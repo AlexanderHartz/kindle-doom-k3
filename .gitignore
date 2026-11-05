@@ -2,4 +2,5 @@ Doom.wad
 *.o
 /prboom
 /extensions/prboom/prboom
+/extensions/prboom/prboom.wad
 *.zip

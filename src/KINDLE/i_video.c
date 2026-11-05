@@ -46,6 +46,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
+#include <linux/fb.h>
 #endif
 
 
@@ -95,13 +96,42 @@ static kindle_key_t kkey;
 #define KINDLE_WIDTH 800
 #define KINDLE_HEIGHT 600
 
+/* Destination framebuffer geometry. Defaults are the Kindle 3 panel; they
+ * are overwritten from FBIOGET_VSCREENINFO when the ioctl is available. */
+static int fb_width = 600;
+static int fb_height = 800;
+static int fb_bpp = 4;
+static int fb_line_length = 300;
+static int fb_size = 240000;
+
 /////////// FRAMEBUFFER STUFF
-static void init_framebuffer() {
+static void init_framebuffer(void) {
+  struct fb_var_screeninfo vinfo;
+  struct fb_fix_screeninfo finfo;
+
   fbFd = open("/dev/fb0", O_RDWR);
   if (fbFd == -1) {
     perror("open(/dev/fb0)");
     exit(1);
   }
+
+  if (ioctl(fbFd, FBIOGET_VSCREENINFO, &vinfo) == 0) {
+    fb_width = vinfo.xres;
+    fb_height = vinfo.yres;
+    fb_bpp = vinfo.bits_per_pixel;
+  } else {
+    lprintf(LO_INFO, "FBIOGET_VSCREENINFO failed, assuming Kindle 3 600x800x4\n");
+  }
+
+  if (ioctl(fbFd, FBIOGET_FSCREENINFO, &finfo) == 0 && finfo.line_length > 0) {
+    fb_line_length = finfo.line_length;
+  } else {
+    fb_line_length = (fb_width * fb_bpp + 7) / 8;
+  }
+  fb_size = fb_line_length * fb_height;
+
+  lprintf(LO_INFO, "framebuffer: %dx%d, %dbpp, stride %d, %d bytes\n",
+          fb_width, fb_height, fb_bpp, fb_line_length, fb_size);
 }
 
 static void update_framebuffer(int full) {
@@ -112,8 +142,8 @@ static void update_framebuffer(int full) {
   }
 }
 
-static void clear_framebuffer() {
-  ioctl(fbFd, 0x46e1, 0);  
+static void clear_framebuffer(void) {
+  ioctl(fbFd, 0x46e1, 0);
 }
 
 
@@ -328,15 +358,41 @@ static int newpal = 0;
 
 void I_FinishUpdate (void)
 {
+  static int first_update = 1;
+  const unsigned char *src;
+  int x, y, col;
+  int v0, v1;
+
   if (I_SkipFrame()) return;
 
-  for (int x=0; x < SCREENWIDTH; x++) {
-    for (int y=0; y < SCREENHEIGHT; y++) {
-      screen[x*600+(599-y)] = ~screens[0].data[y*SCREENWIDTH+x];
+  src = screens[0].data;
+
+  if (fb_bpp == 4) {
+    /* Kindle 3: 4bpp, two pixels per byte, high nibble first.
+     * The game renders 800x600 landscape; the panel is 600x800 portrait. */
+    for (x = 0; x < SCREENWIDTH && x < fb_height; x++) {
+      unsigned char *row = screen + x * fb_line_length;
+      for (col = 0; col < fb_width; col += 2) {
+        int sy0 = fb_width - 1 - col;
+        int sy1 = fb_width - 1 - (col + 1);
+        v0 = (sy0 >= 0 && sy0 < SCREENHEIGHT) ? src[sy0 * SCREENWIDTH + x] >> 4 : 0;
+        v1 = (sy1 >= 0 && sy1 < SCREENHEIGHT) ? src[sy1 * SCREENWIDTH + x] >> 4 : 0;
+        row[col >> 1] = (unsigned char)((v0 << 4) | (v1 & 0x0f));
+      }
+    }
+  } else {
+    /* Kindle 4 and other 8bpp framebuffers: keep the original behaviour. */
+    for (x = 0; x < SCREENWIDTH && x < fb_height; x++) {
+      unsigned char *row = screen + x * fb_line_length;
+      for (y = 0; y < SCREENHEIGHT && y < fb_width; y++) {
+        col = fb_width - 1 - y;
+        row[col] = (unsigned char)~src[y * SCREENWIDTH + x];
+      }
     }
   }
 
-  update_framebuffer(0);
+  update_framebuffer(first_update);
+  first_update = 0;
 }
 
 //
@@ -496,9 +552,11 @@ void I_UpdateVideoMode(void)
   I_SetRes();
 
 
-  screen = mmap(NULL, 600 * 800, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_LOCKED, fbFd, 0);
+  screen = mmap(NULL, fb_size, PROT_READ|PROT_WRITE, MAP_SHARED, fbFd, 0);
 
-  if(screen == NULL) {
+  if(screen == MAP_FAILED) {
+    screen = NULL;
+    perror("mmap(/dev/fb0)");
     I_Error("Couldn't set %dx%d video mode", SCREENWIDTH, SCREENHEIGHT);
   }
 
@@ -508,12 +566,12 @@ void I_UpdateVideoMode(void)
 
   // Get the info needed to render to the display
 
-    byte* screen_data = (byte*)malloc(800*600);
+    byte* screen_data = (byte*)malloc(SCREENWIDTH * SCREENHEIGHT);
     screens[0].not_on_heap = true;
     screens[0].data = (unsigned char *) (screen_data);
-    screens[0].byte_pitch = KINDLE_WIDTH;
-    screens[0].short_pitch = KINDLE_WIDTH; // screen->pitch / V_GetModePixelDepth(VID_MODE16);
-    screens[0].int_pitch = KINDLE_WIDTH; // screen->pitch / V_GetModePixelDepth(VID_MODE32);
+    screens[0].byte_pitch = SCREENWIDTH;
+    screens[0].short_pitch = SCREENWIDTH; // screen->pitch / V_GetModePixelDepth(VID_MODE16);
+    screens[0].int_pitch = SCREENWIDTH; // screen->pitch / V_GetModePixelDepth(VID_MODE32);
 
 
   V_AllocScreens();

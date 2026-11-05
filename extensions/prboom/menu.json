@@ -5,11 +5,12 @@
             "items": [
                 {
                     "name": "PrBoom",
-                    "action": "./run.sh",
+                    "action": "/bin/sh",
+                    "params": "/mnt/us/extensions/prboom/run.sh",
                     "refresh": false,
                     "exitmenu": false
                 }
             ]
         }
     ]
-  }
+}
