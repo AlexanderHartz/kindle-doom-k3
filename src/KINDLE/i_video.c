@@ -37,6 +37,7 @@
 #endif
 
 #include <stdlib.h>
+#include <math.h>
 
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
@@ -103,6 +104,11 @@ static int fb_height = 800;
 static int fb_bpp = 4;
 static int fb_line_length = 300;
 static int fb_size = 240000;
+
+/* 8-bit Doom palette index -> 4-bit grayscale value. */
+static unsigned char palette_lut[256];
+static int palette_lut_ready = 0;
+static int invert_fb = 1;
 
 /////////// FRAMEBUFFER STUFF
 static void init_framebuffer(void) {
@@ -219,27 +225,43 @@ static boolean mouse_currently_grabbed;
 #define KINDLE_HOME 102
 #define KINDLE_MENU 139
 #define KINDLE_BACK 158
-#define KINDLE_KEYBOARD 29
 
 static int I_TranslateKey(unsigned short code)
 {
-  int rc = 0;
-
   switch (code) {
-    case KINDLE_LEFT: rc = KEYD_DOWNARROW; break;
-    case KINDLE_RIGHT: rc = KEYD_UPARROW; break;
-    case KINDLE_UP: rc = KEYD_LEFTARROW; break;
-    case KINDLE_DOWN: rc = KEYD_RIGHTARROW; break;
-    case KINDLE_OK: rc = KEYD_RCTRL; break;
-    case KINDLE_BACK: rc = KEYD_ESCAPE; break;
-    case KINDLE_MENU: rc = KEYD_ENTER; break;
-    case KINDLE_KEYBOARD: rc = KEYD_SPACEBAR; break;
-    default: break;
+    /* Fiveway. The game is rotated into landscape, so keep the original
+     * rotated mapping used by this port. */
+    case KINDLE_LEFT:  return KEYD_DOWNARROW;
+    case KINDLE_RIGHT: return KEYD_UPARROW;
+    case KINDLE_UP:    return KEYD_LEFTARROW;
+    case KINDLE_DOWN:  return KEYD_RIGHTARROW;
+    case KINDLE_OK:    return KEYD_RCTRL;
+    case KINDLE_BACK:  return KEYD_ESCAPE;
+    case KINDLE_MENU:  return KEYD_SPACEBAR;
+
+    /* Kindle 3 physical keyboard (standard Linux key codes). */
+    case 1:  return KEYD_ESCAPE;       /* Esc */
+    case 14: return KEYD_BACKSPACE;    /* Del/backspace */
+    case 28: return KEYD_ENTER;        /* Enter */
+    case 29: return KEYD_RCTRL;        /* Ctrl: fire */
+    case 42: return KEYD_RSHIFT;       /* Shift: run */
+    case 56: return KEYD_RALT;         /* Alt: strafe modifier */
+    case 57: return KEYD_SPACEBAR;     /* Space: use */
+    case 17: return KEYD_UPARROW;      /* W: forward */
+    case 31: return KEYD_DOWNARROW;    /* S: backward */
+    case 30: return KEYD_LEFTARROW;    /* A: turn left */
+    case 32: return KEYD_RIGHTARROW;   /* D: turn right */
+    case 16: return ',';               /* Q: strafe left */
+    case 18: return '.';               /* E: strafe right */
+    case 2:  return '1';               /* weapon 1 */
+    case 3:  return '2';
+    case 4:  return '3';
+    case 5:  return '4';
+    case 6:  return '5';
+    case 7:  return '6';
+    case 8:  return '7';               /* weapon 7 */
+    default: return 0;
   }
-
-
-  return rc;
-
 }
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -288,8 +310,9 @@ static void I_GetEvent(kindle_key_t k)
 void I_StartTic (void)
 {
   while ( kindle_poll_keys(&kkey)) {
-    //printf("Keycode: %d // Status: %d\n", kkey.keyCode, kkey.status);
-    I_GetEvent(kkey);
+    /* truc3 is the input_event type. Only feed EV_KEY events (1). */
+    if (kkey.truc3 == 1)
+      I_GetEvent(kkey);
   }
 }
 
@@ -375,8 +398,18 @@ void I_FinishUpdate (void)
       for (col = 0; col < fb_width; col += 2) {
         int sy0 = fb_width - 1 - col;
         int sy1 = fb_width - 1 - (col + 1);
-        v0 = (sy0 >= 0 && sy0 < SCREENHEIGHT) ? src[sy0 * SCREENWIDTH + x] >> 4 : 0;
-        v1 = (sy1 >= 0 && sy1 < SCREENHEIGHT) ? src[sy1 * SCREENWIDTH + x] >> 4 : 0;
+        if (sy0 >= 0 && sy0 < SCREENHEIGHT) {
+          v0 = palette_lut_ready ? palette_lut[src[sy0 * SCREENWIDTH + x]] : (src[sy0 * SCREENWIDTH + x] >> 4);
+          if (invert_fb) v0 = 15 - v0;
+        } else {
+          v0 = 0;
+        }
+        if (sy1 >= 0 && sy1 < SCREENHEIGHT) {
+          v1 = palette_lut_ready ? palette_lut[src[sy1 * SCREENWIDTH + x]] : (src[sy1 * SCREENWIDTH + x] >> 4);
+          if (invert_fb) v1 = 15 - v1;
+        } else {
+          v1 = 0;
+        }
         row[col >> 1] = (unsigned char)((v0 << 4) | (v1 & 0x0f));
       }
     }
@@ -404,7 +437,52 @@ void I_FinishUpdate (void)
 //
 void I_SetPalette (int pal)
 {
+  const unsigned char *p;
+  const char *g;
+  float gamma = 1.0f;
+  int i;
+
   newpal = pal;
+  if (pal == NO_PALETTE_CHANGE)
+    return;
+  if (W_CheckNumForName("PLAYPAL") < 0)
+    return;
+
+  p = (const unsigned char *)W_CacheLumpName("PLAYPAL");
+  if (!p)
+    return;
+  if (pal < 0 || pal > 13)
+    pal = 0;
+  p += pal * 768;
+
+  g = getenv("PRBOOM_GAMMA");
+  if (g && *g) {
+    gamma = (float)atof(g);
+    if (gamma < 0.5f) gamma = 0.5f;
+    if (gamma > 3.0f) gamma = 3.0f;
+  }
+
+  for (i = 0; i < 256; i++) {
+    int r = p[i*3];
+    int gg = p[i*3+1];
+    int b = p[i*3+2];
+    int lum = (r*77 + gg*151 + b*28) >> 8;
+    int v;
+
+    if (gamma == 1.0f) {
+      v = lum >> 4;
+    } else {
+      float f = (float)lum / 255.0f;
+      f = (float)pow(f, gamma);
+      v = (int)(f * 15.0f + 0.5f);
+    }
+    if (v < 0) v = 0;
+    if (v > 15) v = 15;
+    palette_lut[i] = (unsigned char)v;
+  }
+
+  W_UnlockLumpName("PLAYPAL");
+  palette_lut_ready = 1;
 }
 
 // I_PreInitGraphics
@@ -418,6 +496,18 @@ static void I_ShutdownSDL(void)
 
 void I_PreInitGraphics(void)
 {
+  int i;
+
+  for (i = 0; i < 256; i++)
+    palette_lut[i] = (unsigned char)(i >> 4);
+  palette_lut_ready = 1;
+
+  {
+    const char *inv = getenv("PRBOOM_INVERT");
+    if (inv)
+      invert_fb = atoi(inv) != 0;
+  }
+
   init_framebuffer();
 
  atexit(I_ShutdownSDL);

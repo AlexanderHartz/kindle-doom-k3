@@ -39,6 +39,15 @@
 #define HAVE_MIXER
 #endif
 #include <math.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <sys/soundcard.h>
+#ifdef HAVE_ALSA
+#include <alsa/asoundlib.h>
+#endif
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
@@ -85,7 +94,16 @@ static int SAMPLECOUNT=   512;
 int snd_samplerate=11025;
 
 // The actual output device.
-int audio_fd;
+int audio_fd = -1;
+#ifdef HAVE_ALSA
+static snd_pcm_t *pcm_handle = NULL;
+static int sound_alsa = 0;
+#endif
+static pthread_t sound_thread;
+static pthread_mutex_t sound_lock = PTHREAD_MUTEX_INITIALIZER;
+static int sound_thread_started = 0;
+static int sound_tables_initialized = 0;
+static void *I_SoundThread(void *arg);
 
 typedef struct {
   // SFX id of the playing sound effect.
@@ -207,7 +225,12 @@ static void updateSoundParams(int handle, int volume, int seperation, int pitch)
 
 void I_UpdateSoundParams(int handle, int volume, int seperation, int pitch)
 {
-  
+  if (!sound_inited || handle < 0 || handle >= MAX_CHANNELS)
+    return;
+
+  pthread_mutex_lock(&sound_lock);
+  updateSoundParams(handle, volume, seperation, pitch);
+  pthread_mutex_unlock(&sound_lock);
 }
 
 //
@@ -221,6 +244,9 @@ void I_UpdateSoundParams(int handle, int volume, int seperation, int pitch)
 //
 void I_SetChannels(void)
 {
+  if (sound_tables_initialized)
+    return;
+
   // Init internal lookups (raw data, mixing buffer, channels).
   // This function sets up internal lookups used during
   //  the mixing process.
@@ -252,6 +278,8 @@ void I_SetChannels(void)
       vol_lookup[i*256+j] = (i*(j-128)*256)/191;
       //vol_lookup[i*256+j] = (i*(j-128)*256)/127;
     }
+
+  sound_tables_initialized = 1;
 }
 
 //
@@ -279,27 +307,56 @@ int I_GetSfxLumpNum(sfxinfo_t* sfx)
 //
 int I_StartSound(int id, int channel, int vol, int sep, int pitch, int priority)
 {
-  return -1;
+  const unsigned char *data;
+  int lumpnum;
+  size_t len;
+
+  if (!sound_inited || channel < 0 || channel >= MAX_CHANNELS)
+    return -1;
+
+  lumpnum = I_GetSfxLumpNum(&S_sfx[id]);
+  if (lumpnum < 0)
+    return -1;
+
+  data = (const unsigned char *)W_CacheLumpNum(lumpnum);
+  len = (size_t)W_LumpLength(lumpnum);
+  if (len < 8) {
+    W_UnlockLumpNum(lumpnum);
+    return -1;
+  }
+
+  pthread_mutex_lock(&sound_lock);
+  addsfx(id, channel, data, len);
+  updateSoundParams(channel, vol, sep, pitch);
+  pthread_mutex_unlock(&sound_lock);
+
+  return channel;
 }
 
 
 
 void I_StopSound (int handle)
 {
-#ifdef RANGECHECK
-  if ((handle < 0) || (handle >= MAX_CHANNELS))
-    I_Error("I_StopSound: handle out of range");
-#endif
+  if (handle < 0 || handle >= MAX_CHANNELS)
+    return;
+
+  pthread_mutex_lock(&sound_lock);
+  stopchan(handle);
+  pthread_mutex_unlock(&sound_lock);
 }
 
 
 boolean I_SoundIsPlaying(int handle)
 {
-#ifdef RANGECHECK
-  if ((handle < 0) || (handle >= MAX_CHANNELS))
-    I_Error("I_SoundIsPlaying: handle out of range");
-#endif
-  return channelinfo[handle].data != NULL;
+  boolean result;
+
+  if (handle < 0 || handle >= MAX_CHANNELS)
+    return false;
+
+  pthread_mutex_lock(&sound_lock);
+  result = channelinfo[handle].data != NULL;
+  pthread_mutex_unlock(&sound_lock);
+  return result;
 }
 
 
@@ -308,8 +365,10 @@ boolean I_AnySoundStillPlaying(void)
   boolean result = false;
   int i;
 
+  pthread_mutex_lock(&sound_lock);
   for (i=0; i<MAX_CHANNELS; i++)
     result |= channelinfo[i].data != NULL;
+  pthread_mutex_unlock(&sound_lock);
 
   return result;
 }
@@ -329,21 +388,263 @@ boolean I_AnySoundStillPlaying(void)
 
 static void I_UpdateSound(void *unused, int *stream, int len)
 {
+  short *out = (short *)stream;
+  int i, j;
 
+  memset(out, 0, (size_t)len * 2 * sizeof(short));
+
+  pthread_mutex_lock(&sound_lock);
+  for (i = 0; i < MAX_CHANNELS; i++) {
+    channel_info_t *c = &channelinfo[i];
+    if (!c->data)
+      continue;
+
+    for (j = 0; j < len; j++) {
+      unsigned int sample;
+
+      if (c->data >= c->enddata) {
+        stopchan(i);
+        break;
+      }
+
+      sample = *c->data;
+      out[j*2]   += c->leftvol_lookup[sample];
+      out[j*2+1] += c->rightvol_lookup[sample];
+
+      c->stepremainder += c->step;
+      c->data += c->stepremainder >> 16;
+      c->stepremainder &= 0xffff;
+    }
+  }
+  pthread_mutex_unlock(&sound_lock);
+
+  for (j = 0; j < len * 2; j++) {
+    if (out[j] > 32767)
+      out[j] = 32767;
+    else if (out[j] < -32768)
+      out[j] = -32768;
+  }
+}
+
+static void *I_SoundThread(void *arg)
+{
+  int mixbuf[SAMPLECOUNT * 2];
+
+  while (sound_inited) {
+    I_UpdateSound(NULL, mixbuf, SAMPLECOUNT);
+
+#ifdef HAVE_ALSA
+    if (sound_alsa) {
+      snd_pcm_sframes_t n = snd_pcm_writei(pcm_handle, mixbuf, SAMPLECOUNT);
+      if (n < 0) {
+        if (n == -EPIPE) {
+          snd_pcm_prepare(pcm_handle);
+        } else if (n == -EAGAIN) {
+          usleep(2000);
+        } else {
+          lprintf(LO_WARN, "I_SoundThread: ALSA write error %ld\n", (long)n);
+          sound_inited = false;
+          break;
+        }
+      }
+      continue;
+    }
+#endif
+
+    {
+      unsigned char *p = (unsigned char *)mixbuf;
+      int bytes = (int)(SAMPLECOUNT * 2 * sizeof(short));
+
+      while (bytes > 0 && sound_inited) {
+        ssize_t n = write(audio_fd, p, (size_t)bytes);
+        if (n > 0) {
+          p += n;
+          bytes -= (int)n;
+        } else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+          usleep(2000);
+        } else {
+          sound_inited = false;
+          break;
+        }
+      }
+
+      if (sound_inited)
+        usleep((useconds_t)(1000000ULL * SAMPLECOUNT / snd_samplerate));
+    }
+  }
+
+  return NULL;
 }
 
 void I_ShutdownSound(void)
 {
-  if (sound_inited) {
+#ifdef HAVE_ALSA
+  if (!sound_inited && audio_fd < 0 && pcm_handle == NULL)
+    return;
+#else
+  if (!sound_inited && audio_fd < 0)
+    return;
+#endif
 
+  sound_inited = false;
+
+  if (sound_thread_started) {
+    pthread_join(sound_thread, NULL);
+    sound_thread_started = 0;
+  }
+
+#ifdef HAVE_ALSA
+  if (pcm_handle) {
+    snd_pcm_drain(pcm_handle);
+    snd_pcm_close(pcm_handle);
+    pcm_handle = NULL;
+    sound_alsa = 0;
+  }
+#endif
+
+  if (audio_fd >= 0) {
+    close(audio_fd);
+    audio_fd = -1;
   }
 }
 
-//static SDL_AudioSpec audio;
+#ifdef HAVE_ALSA
+static int I_TryAlsaDevice(const char *name)
+{
+  snd_pcm_t *pcm = NULL;
+  snd_pcm_hw_params_t *hw = NULL;
+  unsigned int rate = (unsigned int)snd_samplerate;
+  int err;
+
+  err = snd_pcm_open(&pcm, name, SND_PCM_STREAM_PLAYBACK, 0);
+  if (err < 0) {
+    lprintf(LO_WARN, "I_InitSound: ALSA %s open failed: %s\n", name, snd_strerror(err));
+    return -1;
+  }
+
+  if ((err = snd_pcm_hw_params_malloc(&hw)) < 0) {
+    snd_pcm_close(pcm);
+    return -1;
+  }
+
+  if ((err = snd_pcm_hw_params_any(pcm, hw)) < 0)
+    goto fail;
+  if ((err = snd_pcm_hw_params_set_access(pcm, hw, SND_PCM_ACCESS_RW_INTERLEAVED)) < 0)
+    goto fail;
+  if ((err = snd_pcm_hw_params_set_format(pcm, hw, SND_PCM_FORMAT_S16_LE)) < 0)
+    goto fail;
+  if ((err = snd_pcm_hw_params_set_channels(pcm, hw, 2)) < 0)
+    goto fail;
+  if ((err = snd_pcm_hw_params_set_rate_near(pcm, hw, &rate, 0)) < 0)
+    goto fail;
+  if ((err = snd_pcm_hw_params(pcm, hw)) < 0)
+    goto fail;
+
+  snd_pcm_hw_params_free(hw);
+  hw = NULL;
+
+  if ((err = snd_pcm_prepare(pcm)) < 0) {
+    snd_pcm_close(pcm);
+    return -1;
+  }
+
+  pcm_handle = pcm;
+  sound_alsa = 1;
+  snd_samplerate = (int)rate;
+  lprintf(LO_INFO, "I_InitSound: ALSA device %s at %d Hz\n", name, snd_samplerate);
+  return 0;
+
+fail:
+  lprintf(LO_WARN, "I_InitSound: ALSA %s setup failed: %s\n", name, snd_strerror(err));
+  if (hw)
+    snd_pcm_hw_params_free(hw);
+  snd_pcm_close(pcm);
+  return -1;
+}
+#endif
+
+static int I_StartAudioThread(void)
+{
+  I_SetChannels();
+  sound_inited = true;
+
+  if (pthread_create(&sound_thread, NULL, I_SoundThread, NULL) != 0) {
+    sound_inited = false;
+    return -1;
+  }
+
+  sound_thread_started = 1;
+  atexit(I_ShutdownSound);
+  return 0;
+}
 
 void I_InitSound(void)
 {
+  int fmt, stereo, rate, frag;
 
+  if (sound_inited)
+    return;
+
+#ifdef HAVE_ALSA
+  {
+    const char *adev = getenv("PRBOOM_ALSA_DEVICE");
+    if (adev && *adev) {
+      I_TryAlsaDevice(adev);
+    } else {
+      static const char *devs[] = { "plughw:0,0", "hw:0,0", "default", NULL };
+      int i;
+      for (i = 0; devs[i]; i++) {
+        if (I_TryAlsaDevice(devs[i]) == 0)
+          break;
+      }
+    }
+    if (sound_alsa) {
+      if (I_StartAudioThread() == 0)
+        return;
+      snd_pcm_close(pcm_handle);
+      pcm_handle = NULL;
+      sound_alsa = 0;
+    }
+  }
+#endif
+
+  audio_fd = open("/dev/dsp", O_WRONLY | O_NONBLOCK);
+  if (audio_fd < 0)
+    audio_fd = open("/dev/sound/dsp", O_WRONLY | O_NONBLOCK);
+
+  if (audio_fd < 0) {
+    lprintf(LO_WARN, "I_InitSound: no ALSA or OSS device, sound disabled\n");
+    return;
+  }
+
+  fmt = AFMT_S16_LE;
+  if (ioctl(audio_fd, SNDCTL_DSP_SETFMT, &fmt) < 0)
+    lprintf(LO_WARN, "I_InitSound: SNDCTL_DSP_SETFMT failed: %s\n", strerror(errno));
+
+  stereo = 1;
+  if (ioctl(audio_fd, SNDCTL_DSP_STEREO, &stereo) < 0)
+    lprintf(LO_WARN, "I_InitSound: SNDCTL_DSP_STEREO failed: %s\n", strerror(errno));
+
+  rate = snd_samplerate;
+  if (ioctl(audio_fd, SNDCTL_DSP_SPEED, &rate) < 0)
+    lprintf(LO_WARN, "I_InitSound: SNDCTL_DSP_SPEED failed: %s\n", strerror(errno));
+  else
+    snd_samplerate = rate;
+
+  if (snd_samplerate <= 0)
+    snd_samplerate = 11025;
+
+  frag = 0x00040008;
+  ioctl(audio_fd, SNDCTL_DSP_SETFRAGMENT, &frag);
+
+  if (I_StartAudioThread() != 0) {
+    close(audio_fd);
+    audio_fd = -1;
+    lprintf(LO_WARN, "I_InitSound: could not start audio thread\n");
+    return;
+  }
+
+  lprintf(LO_INFO, "I_InitSound: OSS audio at %d Hz\n", snd_samplerate);
 }
 
 

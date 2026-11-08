@@ -4,9 +4,13 @@ DIR=$(cd "$(dirname "$0")" && pwd) || exit 1
 cd "$DIR" || exit 1
 
 export HOME=/mnt/us
-LOG=/tmp/prboom.log
+LOG="$DIR/prboom.log"
+PRBOOM_GAMMA=${PRBOOM_GAMMA:-1.0}
+PRBOOM_INVERT=${PRBOOM_INVERT:-1}
+export PRBOOM_GAMMA PRBOOM_INVERT
 
 restore() {
+    echo "run.sh: restoring framework" >>"$LOG" 2>&1
     lipc-set-prop -- com.lab126.powerd preventScreenSaver 0 >/dev/null 2>&1 || \
         lipc-set-prop com.lab126.powerd preventScreenSaver 0 >/dev/null 2>&1
     /etc/init.d/framework start >/dev/null 2>&1 || \
@@ -42,6 +46,30 @@ if [ ! -f "$DIR/prboom" ]; then
 fi
 
 : >"$LOG"
+{
+    echo "=== PrBoom diagnostics ==="
+    date
+    echo "DIR=$DIR"
+    echo "IWAD=$IWAD"
+    echo "PWAD=$PWAD"
+    echo "PRBOOM_GAMMA=$PRBOOM_GAMMA PRBOOM_INVERT=$PRBOOM_INVERT"
+    echo "--- /dev ---"
+    ls -l /dev/dsp /dev/snd 2>&1
+    echo "--- /dev/snd ---"
+    ls -l /dev/snd 2>&1
+    echo "--- /proc/asound/cards ---"
+    cat /proc/asound/cards 2>&1
+    echo "--- /proc/asound/pcm ---"
+    cat /proc/asound/pcm 2>&1
+    echo "--- /usr/share/alsa ---"
+    ls -l /usr/share/alsa/alsa.conf /usr/share/alsa 2>&1
+    echo "--- audio commands ---"
+    command -v aplay 2>&1
+    command -v amixer 2>&1
+    if command -v aplay >/dev/null 2>&1; then aplay -l 2>&1; fi
+    if command -v amixer >/dev/null 2>&1; then amixer -c 0 scontrols 2>&1; fi
+    echo "=== prboom output ==="
+} >>"$LOG" 2>&1
 
 /etc/init.d/framework stop >/dev/null 2>&1 || \
     stop framework >/dev/null 2>&1
@@ -50,7 +78,8 @@ sleep 1
 lipc-set-prop -- com.lab126.powerd preventScreenSaver 1 >/dev/null 2>&1 || \
     lipc-set-prop com.lab126.powerd preventScreenSaver 1 >/dev/null 2>&1
 
-./prboom -iwad "$IWAD" -file "$PWAD" -nosound -nomusic -nosfx -warp 1 1 \
-    >>"$LOG" 2>&1
+./prboom -iwad "$IWAD" -file "$PWAD" -nomusic -warp 1 1 >>"$LOG" 2>&1
+rc=$?
+echo "prboom exit=$rc" >>"$LOG" 2>&1
 
 exit 0

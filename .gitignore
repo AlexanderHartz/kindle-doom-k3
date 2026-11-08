@@ -4,3 +4,5 @@ Doom.wad
 /extensions/prboom/prboom
 /extensions/prboom/prboom.wad
 *.zip
+.fuse_hidden*
+/extensions/prboom/prboom.log
