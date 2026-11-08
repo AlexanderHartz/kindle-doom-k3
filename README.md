@@ -85,6 +85,9 @@ launcher, `asound.conf` and the free `prboom.wad`.
 - `prboom.wad` replaced by Debian's DFSG-cleaned data file.
 - Helper dogs disabled (`DOGS`), matching the free WAD.
 - Doom 2 / Freedoom 2 detection for the initial warp.
+- Single-instance launcher: a second launch while a game is running exits
+  without touching the framebuffer or the framework, preventing concurrent
+  renders and duplicate framework starts.
 
 ## Known limitations
 
