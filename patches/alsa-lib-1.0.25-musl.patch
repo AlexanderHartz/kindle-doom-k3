@@ -1,0 +1,68 @@
+--- a/src/conf.c
++++ b/src/conf.c
+@@ -427,8 +427,17 @@
+ #ifndef DOC_HIDDEN
+ 
+ #ifdef HAVE_LIBPTHREAD
+-static pthread_mutex_t snd_config_update_mutex =
+-				PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
++static pthread_mutex_t snd_config_update_mutex;
++static pthread_once_t snd_config_update_once = PTHREAD_ONCE_INIT;
++
++static void snd_config_update_mutex_init(void)
++{
++	pthread_mutexattr_t attr;
++	pthread_mutexattr_init(&attr);
++	pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
++	pthread_mutex_init(&snd_config_update_mutex, &attr);
++	pthread_mutexattr_destroy(&attr);
++}
+ #endif
+ 
+ struct _snd_config {
+@@ -474,6 +483,7 @@
+ 
+ static inline void snd_config_lock(void)
+ {
++	pthread_once(&snd_config_update_once, snd_config_update_mutex_init);
+ 	pthread_mutex_lock(&snd_config_update_mutex);
+ }
+ 
+@@ -496,7 +506,7 @@
+ 	if (!*str)
+ 		return -EINVAL;
+ 	errno = 0;
+-	if (sscanf(str, "%Li%n", &v, &endidx) < 1)
++	if (sscanf(str, "%lld%n", &v, &endidx) < 1)
+ 		return -EINVAL;
+ 	if (str[endidx])
+ 		return -EINVAL;
+@@ -1378,7 +1388,7 @@
+ 		snd_output_printf(out, "%ld", n->u.integer);
+ 		break;
+ 	case SND_CONFIG_TYPE_INTEGER64:
+-		snd_output_printf(out, "%Ld", n->u.integer64);
++		snd_output_printf(out, "%lld", n->u.integer64);
+ 		break;
+ 	case SND_CONFIG_TYPE_REAL:
+ 		snd_output_printf(out, "%-16g", n->u.real);
+@@ -2630,7 +2640,7 @@
+ 		{
+ 			char res[32];
+ 			int err;
+-			err = snprintf(res, sizeof(res), "%Li", config->u.integer64);
++			err = snprintf(res, sizeof(res), "%lld", config->u.integer64);
+ 			if (err < 0 || err == sizeof(res)) {
+ 				assert(0);
+ 				return -ENOMEM;
+--- a/include/global.h
++++ b/include/global.h
+@@ -133,7 +133,7 @@
+ 
+ int snd_user_file(const char *file, char **result);
+ 
+-#if !defined(_POSIX_C_SOURCE) && !defined(_POSIX_SOURCE)
++#if 0
+ struct timeval {
+ 	time_t		tv_sec;		/* seconds */
+ 	long		tv_usec;	/* microseconds */
