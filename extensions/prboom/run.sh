@@ -9,7 +9,10 @@ PRBOOM_GAMMA=${PRBOOM_GAMMA:-1.0}
 PRBOOM_INVERT=${PRBOOM_INVERT:-1}
 export PRBOOM_GAMMA PRBOOM_INVERT
 
-if [ -z "$ALSA_CONFIG_PATH" ] && [ -f /usr/share/alsa/alsa.conf ]; then
+if [ -f "$DIR/asound.conf" ]; then
+    ALSA_CONFIG_PATH="$DIR/asound.conf"
+    export ALSA_CONFIG_PATH
+elif [ -z "$ALSA_CONFIG_PATH" ] && [ -f /usr/share/alsa/alsa.conf ]; then
     ALSA_CONFIG_PATH=/usr/share/alsa/alsa.conf
     export ALSA_CONFIG_PATH
 fi
@@ -59,6 +62,8 @@ fi
     echo "PWAD=$PWAD"
     echo "PRBOOM_GAMMA=$PRBOOM_GAMMA PRBOOM_INVERT=$PRBOOM_INVERT"
     echo "ALSA_CONFIG_PATH=$ALSA_CONFIG_PATH"
+    ls -l "$DIR/asound.conf" 2>&1
+    cat "$DIR/asound.conf" 2>&1
     echo "--- /dev ---"
     ls -l /dev/dsp /dev/snd 2>&1
     echo "--- /dev/snd ---"

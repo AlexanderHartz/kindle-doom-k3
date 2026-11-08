@@ -591,7 +591,7 @@ void I_InitSound(void)
     if (adev && *adev) {
       I_TryAlsaDevice(adev);
     } else {
-      static const char *devs[] = { "plughw:0,0", "hw:0,0", "default", NULL };
+      static const char *devs[] = { "default", "plughw:0,0", "hw:0,0", NULL };
       int i;
       for (i = 0; devs[i]; i++) {
         if (I_TryAlsaDevice(devs[i]) == 0)
