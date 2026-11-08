@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <extension>
     <information>
-        <name>PrBoom</name>
-        <version>1.0</version>
-        <author>simsor</author>
+        <name>PrBoom (Kindle 3)</name>
+        <version>1.1</version>
+        <author>AlexanderHartz, based on simsor</author>
         <id>SIMSOR-PRBOOM</id>
     </information>
     <menus>

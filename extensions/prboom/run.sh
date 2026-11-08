@@ -29,8 +29,11 @@ trap restore EXIT INT TERM HUP
 
 IWAD=""
 for f in /mnt/us/doom.wad /mnt/us/DOOM.WAD \
+         /mnt/us/doom2.wad /mnt/us/DOOM2.WAD \
          /mnt/us/doom/doom.wad /mnt/us/doom/DOOM.WAD \
-         /mnt/us/freedoom1.wad /mnt/us/freedoom.wad; do
+         /mnt/us/doom/doom2.wad /mnt/us/doom/DOOM2.WAD \
+         /mnt/us/freedoom1.wad /mnt/us/freedoom2.wad \
+         /mnt/us/freedoom.wad; do
     if [ -f "$f" ]; then
         IWAD="$f"
         break
@@ -45,6 +48,12 @@ fi
 
 PWAD="$DIR/prboom.wad"
 [ -f "$PWAD" ] || PWAD=/mnt/us/prboom.wad
+
+# Doom 2 uses MAP01..; Doom 1 uses E1M1..
+case "$IWAD" in
+    *doom2*|*DOOM2*|*freedoom2*) WARP="-warp 1" ;;
+    *) WARP="-warp 1 1" ;;
+esac
 
 chmod +x "$DIR/prboom" 2>/dev/null
 if [ ! -f "$DIR/prboom" ]; then
@@ -61,6 +70,7 @@ fi
     echo "IWAD=$IWAD"
     echo "PWAD=$PWAD"
     echo "PRBOOM_GAMMA=$PRBOOM_GAMMA PRBOOM_INVERT=$PRBOOM_INVERT"
+    echo "WARP=$WARP"
     echo "ALSA_CONFIG_PATH=$ALSA_CONFIG_PATH"
     ls -l "$DIR/asound.conf" 2>&1
     cat "$DIR/asound.conf" 2>&1
@@ -94,7 +104,7 @@ sleep 1
 lipc-set-prop -- com.lab126.powerd preventScreenSaver 1 >/dev/null 2>&1 || \
     lipc-set-prop com.lab126.powerd preventScreenSaver 1 >/dev/null 2>&1
 
-./prboom -iwad "$IWAD" -file "$PWAD" -nomusic -warp 1 1 >>"$LOG" 2>&1
+./prboom -iwad "$IWAD" -file "$PWAD" -nomusic $WARP >>"$LOG" 2>&1
 rc=$?
 echo "prboom exit=$rc" >>"$LOG" 2>&1
 
