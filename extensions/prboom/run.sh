@@ -9,6 +9,11 @@ PRBOOM_GAMMA=${PRBOOM_GAMMA:-1.0}
 PRBOOM_INVERT=${PRBOOM_INVERT:-1}
 export PRBOOM_GAMMA PRBOOM_INVERT
 
+if [ -z "$ALSA_CONFIG_PATH" ] && [ -f /usr/share/alsa/alsa.conf ]; then
+    ALSA_CONFIG_PATH=/usr/share/alsa/alsa.conf
+    export ALSA_CONFIG_PATH
+fi
+
 restore() {
     echo "run.sh: restoring framework" >>"$LOG" 2>&1
     lipc-set-prop -- com.lab126.powerd preventScreenSaver 0 >/dev/null 2>&1 || \
@@ -53,6 +58,7 @@ fi
     echo "IWAD=$IWAD"
     echo "PWAD=$PWAD"
     echo "PRBOOM_GAMMA=$PRBOOM_GAMMA PRBOOM_INVERT=$PRBOOM_INVERT"
+    echo "ALSA_CONFIG_PATH=$ALSA_CONFIG_PATH"
     echo "--- /dev ---"
     ls -l /dev/dsp /dev/snd 2>&1
     echo "--- /dev/snd ---"
@@ -64,10 +70,16 @@ fi
     echo "--- /usr/share/alsa ---"
     ls -l /usr/share/alsa/alsa.conf /usr/share/alsa 2>&1
     echo "--- audio commands ---"
-    command -v aplay 2>&1
-    command -v amixer 2>&1
-    if command -v aplay >/dev/null 2>&1; then aplay -l 2>&1; fi
-    if command -v amixer >/dev/null 2>&1; then amixer -c 0 scontrols 2>&1; fi
+    type aplay 2>&1
+    type amixer 2>&1
+    if type aplay >/dev/null 2>&1; then aplay -l 2>&1; fi
+    if type amixer >/dev/null 2>&1; then
+        amixer -c 0 scontrols 2>&1
+        amixer -c 0 sset 'Master' 100% unmute 2>&1
+        amixer -c 0 sset 'PCM' 100% unmute 2>&1
+        amixer -c 0 sset 'Speaker' 100% unmute 2>&1
+        amixer -c 0 sset 'Headphone' 100% unmute 2>&1
+    fi
     echo "=== prboom output ==="
 } >>"$LOG" 2>&1
 
