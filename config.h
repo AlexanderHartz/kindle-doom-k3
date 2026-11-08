@@ -5,8 +5,10 @@
    (this is EXTREMELY slow). */
 /* #undef CHECKHEAP */
 
-/* Define for support for MBF helper dogs */
-#define DOGS 1
+/* Define for support for MBF helper dogs.
+   Disabled because the bundled DFSG-cleaned prboom.wad does not contain
+   the Wolfenstein 3D helper-dog sprites and sounds. */
+/* #define DOGS 1 */
 
 /* Define to be the path where Doom WADs are stored */
 #define DOOMWADDIR "/usr/local/share/games/doom"

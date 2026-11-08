@@ -24,10 +24,15 @@ prboom: $(OBJ_FILES) Makefile
 extension: prboom
 	cp $< extensions/prboom/$<
 	cp data/prboom.wad extensions/prboom/prboom.wad
+	cp data/README.prboom-wad.md extensions/prboom/PRBOOM-WAD-LICENSE.md
+	cp COPYING extensions/prboom/COPYING
 	rm -f extensions/prboom/prboom.log
+	rm -f PrBoom_KUAL.zip
 	zip -r PrBoom_KUAL.zip extensions
 
 clean:
 	rm -rf $(OBJ_FILES)
 	rm -f prboom PrBoom_KUAL.zip
-	rm -f extensions/prboom/prboom extensions/prboom/prboom.wad extensions/prboom/prboom.log
+	rm -f extensions/prboom/prboom extensions/prboom/prboom.wad
+	rm -f extensions/prboom/PRBOOM-WAD-LICENSE.md extensions/prboom/COPYING
+	rm -f extensions/prboom/prboom.log

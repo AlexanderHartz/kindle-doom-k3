@@ -1,8 +1,11 @@
 Doom.wad
 *.o
+/build/
 /prboom
 /extensions/prboom/prboom
 /extensions/prboom/prboom.wad
+/extensions/prboom/COPYING
+/extensions/prboom/PRBOOM-WAD-LICENSE.md
 *.zip
 .fuse_hidden*
 /extensions/prboom/prboom.log
