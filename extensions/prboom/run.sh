@@ -79,11 +79,10 @@ fi
     type amixer 2>&1
     if type aplay >/dev/null 2>&1; then aplay -l 2>&1; fi
     if type amixer >/dev/null 2>&1; then
-        amixer -c 0 scontrols 2>&1
-        amixer -c 0 sset 'Master' 100% unmute 2>&1
-        amixer -c 0 sset 'PCM' 100% unmute 2>&1
-        amixer -c 0 sset 'Speaker' 100% unmute 2>&1
-        amixer -c 0 sset 'Headphone' 100% unmute 2>&1
+        amixer -D default scontrols 2>&1
+        amixer -D default sset 'Playback' 100% unmute 2>&1
+        amixer -D default sset 'Speaker' 100% unmute 2>&1
+        amixer -D default sset 'Headphone' 100% unmute 2>&1
     fi
     echo "=== prboom output ==="
 } >>"$LOG" 2>&1
